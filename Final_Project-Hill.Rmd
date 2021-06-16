@@ -1,0 +1,519 @@
+---
+title: "Community Analytics Practicum Extravaganza"
+output: 
+  flexdashboard::flex_dashboard:
+    social: menu
+    source: embed
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(  message=F, warning=F, echo=F )
+
+#Load in libraries
+library( tidycensus )
+library( tidyverse )
+library( ggplot2 )
+library( plyr )
+library( stargazer )
+library( corrplot )
+library( purrr )
+library( flexdashboard )
+library( leaflet )
+library( mclust )
+library( pander )
+library( DT )
+```
+
+```{r, quietly=T, include=F}
+census_key <- "e511866c0af14a9b3845572aaa38fb9bd77c86f9"
+census_api_key(census_key)
+
+#Loading data 
+URL <- "https://github.com/DS4PS/cpp-529-master/raw/master/data/CensusData.rds"
+census.dats <- readRDS(gzcon(url( URL )))
+census.dats <- na.omit(census.dats)
+```
+
+
+<style type="text/css"> .sidebar { overflow: auto; } </style>
+
+
+
+Introduction {.storyboard}
+=========================================
+
+
+
+### Project Overview
+
+```{r}
+leaflet() %>%
+  addTiles() %>%
+  addMarkers(lng=-118.1937, lat=33.7701, popup="Los Angeles-Long Beach-Anaheim, CA MSA")
+```
+
+
+***
+
+Introduction to neighborhood change in Los Angeles-Long Beach-Anaheim, CA MSA
+
+This dashboard will be used to detect neighborhood change and gentrification in the Metropolitan Statistical Area (MSA) of Los Angeles-Long Beach-Anaheim. Long Beach has long been my second home and I have watched the city change since my childhood. It is important that the memebers of the City Council have a better understanding of the economic and demographic trends in the city.  
+
+
+
+
+
+
+Data {.storyboard}
+=========================================
+
+
+### Empirical Framework 
+
+```{r, echo=F}
+# only view MSA for Los Angeles County
+
+census.dats <- filter(census.dats, county == "Los Angeles County")
+
+head (census.dats)
+
+```
+
+
+```{r, echo=F}
+#Calculating change Values for variables 
+
+censusChange1<-ddply(census.dats,"TRTID10",summarise, 
+       HousePriceChange = Median.HH.Value10/(Median.HH.Value00+1),# Change variable
+       FreignBornChange = Foreign.Born10/(Foreign.Born00 +.01),
+       RecentImmigrantChange = Recent.Immigrant10/(Recent.Immigrant00+.01),
+       PoorEnglishChange = Poor.English10/(Poor.English00+.01),
+       VeteranChange = Veteran10/(Veteran00+.01),
+       PovertyChange = Poverty10/(Poverty00+.01),
+       PovertyBlackChange = Poverty.Black10/(Poverty.Black00+.01),
+       PovertyWhiteChange = Poverty.White10/(Poverty.White00+.01),
+       PovertyHispanicChange = Poverty.Hispanic10/(Poverty.Hispanic00+.01),
+       PopBlackChange = Pop.Black10/(Pop.Black00+.01),
+       PopHispanicChange = Pop.Hispanic10/(Pop.Hispanic00+.01),
+       PopUnempChange = Pop.Unemp10/(Pop.Unemp00+.01),
+       PopManufactChange = Pop.Manufact10/(Pop.Manufact00+.01),
+       PopSelfEmpChange = Pop.SelfEmp10/(Pop.SelfEmp00+.01),
+       PopProfChange = Pop.Prof10/(Pop.Prof00+.01),
+       FemaleLaborForceChange = Female.LaborForce10/(Female.LaborForce00+.01)
+)
+
+#remove NAs that result 
+censusChange1<-censusChange1[!duplicated(censusChange1$TRTID10),]
+```
+
+
+***
+
+This data was obtainted from the United States Census Bureau. The time period of analysis for this data is 2000-2010. The units of analysis are based on the ratio of change from 2000 to 2010. The following variables will be analyzed: House Price Change, Foreign Born Change, Recent Immigrant Change, Poor English Change, Veteran Change, Poverty Change, Poverty Change of Black Residents, Poverty Change of White Residents, Poverty Change of Hispanic Residents, Population Change of Black Residents, Population Change of Hispanic Residents, Unemplyment Change, Manufacturing Change, Self Employment Change, Professional Employment Change, and Female Labor Force Change. The main variables of interest are House Price Change, Poverty Change, and Unemployment Change. 
+
+
+
+### View Data 
+
+```{r}
+DT::datatable( head(censusChange1, 25) )
+```
+
+
+***
+
+The variables were transformed to reflect the ratio of change that took place from 2000 to 2010. According to the data, house prices nearly doubled in the ten year time period. Poverty and unemployment have also increased. 
+
+
+
+
+### 5-point summary  
+
+```{r, results='asis',message=F, warning=F, fig.width = 9,fig.align='center', echo=F }
+#Visualize 5-point summary
+censusChange1 %>%
+    keep(is.numeric) %>% 
+stargazer(
+          omit.summary.stat = c("p25", "p75"), nobs=F, type="html") # For a pdf document, replace html with latex
+```
+
+
+***
+According to the 5-point summary, the average ratio of change for poverty is about 1.1 times what it was in 2000. Additionally, we can see that the largest change in poverty was neary 13 times what is was in 2000. Unfortuantely, there have also been increases in unemployment from 2000 to 2010 - unemployment is on average about 1.6 times what it was with the largest increase at 35.18 times what it was in 2000. House prices have also drastically increased.   
+
+
+
+
+
+### Histogram 
+
+```{r,message=F, warning=F, echo=F}
+#Histogram
+censusChange1 %>%
+  keep(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+    facet_wrap(~ key, scales = "free") +
+    geom_histogram()
+```
+
+
+***
+According to the histogram, the change in houseing prices have increased significantly. The poverty and unemployment change variables have a somewhat normal distribution, with most values concentrated in the center. 
+
+
+
+
+### Correlation Plot 
+
+```{r, message=F, warning=F, echo=F}
+##save correlations in train_cor
+train_cor <- cor(censusChange1[,-1])
+
+##Correlation Plot
+corrplot(train_cor, type='lower')
+
+```
+
+
+***
+This Correlation Plot shows the relationship between two two variables. According to the Correlation Plot, there is a fairly strong correlation between the Hispanic population and being foreign born. There is also a strong correlation between overall poverty and poverty amongst the Hispanic population. 
+
+
+Regressions
+=========================================
+
+
+### Regression Model Results 
+
+```{r, results='asis', fig.align='center'}
+
+reg1<-lm(HousePriceChange ~  FreignBornChange + PovertyChange + PopBlackChange + PopUnempChange 
+            , data=censusChange1)
+
+reg2<-lm(HousePriceChange ~  FreignBornChange + RecentImmigrantChange + PoorEnglishChange  + VeteranChange + PovertyChange + PovertyBlackChange + PovertyWhiteChange + PovertyHispanicChange + PopBlackChange + PopHispanicChange  , data=censusChange1)
+
+reg3<-lm(HousePriceChange ~  FreignBornChange + RecentImmigrantChange + PoorEnglishChange  + VeteranChange + PovertyChange + PovertyBlackChange + PovertyWhiteChange + PovertyHispanicChange + PopBlackChange + PopHispanicChange +
+PopHispanicChange + PopUnempChange +  PopManufactChange +  PopSelfEmpChange + PopProfChange + FemaleLaborForceChange   , data=censusChange1)
+
+# present results with stargazer
+# library(stargazer)
+stargazer( reg1, reg2, reg3, 
+           title="Effect of Community Change on Housing Price Change",
+           type='html', align=TRUE )
+
+```
+
+
+
+***
+
+
+
+
+Clustering {.storyboard}
+=========================================
+
+
+
+### Identifying Communities
+
+```{r ,message=F, warning=F, echo=F, fig.align='center'}
+# Cluster analysis for 2010 Data
+# library(mclust)
+
+Census2010<-census.dats
+keep.these1 <-c("Foreign.Born10","Recent.Immigrant10","Poor.English10","Veteran10","Poverty10","Poverty.Black10","Poverty.White10","Poverty.Hispanic10","Pop.Black10","Pop.Hispanic10","Pop.Unemp10","Pop.Manufact10","Pop.SelfEmp10","Pop.Prof10","Female.LaborForce10")
+
+#Run Cluster Analysis
+mod2 <- Mclust(Census2010[keep.these1],G=4) # Set groups to 5, but you can remove this to let r split data into own groupings
+
+summary(mod2, parameters = TRUE)
+
+#Add group classification to df
+Census2010$cluster <- mod2$classification
+```
+
+
+```{r ,message=F, warning=F, echo=F, fig.align='center'}
+
+#Visualize Data
+stats1 <- 
+  Census2010 %>% 
+  group_by( cluster ) %>% 
+  select(keep.these1)%>% 
+  summarise_each( funs(mean) )
+
+t <- data.frame( t(stats1), stringsAsFactors=F )
+names(t) <- paste0( "GROUP.", 1:4 )
+t <- t[-1,]
+```
+
+
+***
+
+
+
+
+### Cluster 1
+
+```{r ,message=F, warning=F, echo=F, fig.align='center'}
+
+plot( rep(1,15), 1:15, bty="n", xlim=c(-.2,.7), 
+      type="n", xaxt="n", yaxt="n",
+      xlab="Score", ylab="",
+      main=paste("GROUP",1) )
+abline( v=seq(0,.7,.1), lty=3, lwd=1.5, col="gray90" )
+segments( y0=1:15, x0=0, x1=100, col="gray70", lwd=2 )
+text( 0, 1:15, keep.these1, cex=0.85, pos=2 )
+points( t[,1], 1:15, pch=19, col="Steelblue", cex=1.5 )
+axis( side=1, at=c(0,.1,.3,.2,.4,.5,.6,.7), col.axis="gray", col="gray" )
+
+```
+
+
+***
+
+Living in Poverty with Poor Engligh Skills
+
+
+Traits of this cluster include a signifigant number of poor English speakers that likely live in poverty. Nearly 50% of this group is Hispanic. 
+
+
+
+
+### Cluster 2
+
+```{r ,message=F, warning=F, echo=F, fig.align='center'}
+
+plot( rep(1,15), 1:15, bty="n", xlim=c(-.2,.7), 
+      type="n", xaxt="n", yaxt="n",
+      xlab="Score", ylab="",
+      main=paste("GROUP",2) )
+abline( v=seq(0,.7,.1), lty=3, lwd=1.5, col="gray90" )
+segments( y0=1:15, x0=0, x1=100, col="gray70", lwd=2 )
+text( 0, 1:15, keep.these1, cex=0.85, pos=2 )
+points( t[,2], 1:15, pch=19, col="Steelblue", cex=1.5 )
+axis( side=1, at=c(0,.1,.3,.2,.4,.5,.6,.7), col.axis="gray", col="gray" )
+
+```
+
+
+***
+Hispanic Immigrants
+
+
+More than 70% of this group are Hispanic and almost 50% of this group are recent immigrants. The remaining traits are at less than 30%.
+
+
+
+### Cluster 3 
+
+```{r ,message=F, warning=F, echo=F, fig.align='center'}
+
+plot( rep(1,15), 1:15, bty="n", xlim=c(-.2,.7), 
+      type="n", xaxt="n", yaxt="n",
+      xlab="Score", ylab="",
+      main=paste("GROUP",3) )
+abline( v=seq(0,.7,.1), lty=3, lwd=1.5, col="gray90" )
+segments( y0=1:15, x0=0, x1=100, col="gray70", lwd=2 )
+text( 0, 1:15, keep.these1, cex=0.85, pos=2 )
+points( t[,3], 1:15, pch=19, col="Steelblue", cex=1.5 )
+axis( side=1, at=c(0,.1,.3,.2,.4,.5,.6,.7), col.axis="gray", col="gray" )
+
+```
+
+
+***
+Strong Foreign Born Women
+
+This group is made up of nearly 65% working women and about 60% of this group is foreign born. Further, about 65% of this group is considered professional workers. The remaining traits are equally distributed in the lower percents.  
+
+
+
+### Cluster 4 
+
+```{r ,message=F, warning=F, echo=F, fig.align='center'}
+
+plot( rep(1,15), 1:15, bty="n", xlim=c(-.2,.7), 
+      type="n", xaxt="n", yaxt="n",
+      xlab="Score", ylab="",
+      main=paste("GROUP",4) )
+abline( v=seq(0,.7,.1), lty=3, lwd=1.5, col="gray90" )
+segments( y0=1:15, x0=0, x1=100, col="gray70", lwd=2 )
+text( 0, 1:15, keep.these1, cex=0.85, pos=2 )
+points( t[,4], 1:15, pch=19, col="Steelblue", cex=1.5 )
+axis( side=1, at=c(0,.1,.3,.2,.4,.5,.6,.7), col.axis="gray", col="gray" )
+
+```
+
+
+***
+Foreign Women Trying to Catch a Break
+
+Like the previous group, this group also composed of a high percentage of working wormen - about 70%. Unfortunately, there is also a high rate of poverty - almost 60%. This could be accounted to the foreign born trait, which is about 65% of this group. 
+
+
+
+
+Neighborhoods {.storyboard}
+=========================================
+
+
+### Mapping Clusters
+
+```{r, message=F, warning=F, echo=F}
+
+lalb.pop <-
+get_acs( geography = "tract", variables = "B01003_001",
+         state = "CA", county = "Los Angeles County", geometry = TRUE ) %>% 
+         select( GEOID, estimate ) 
+
+
+# convert to numeric
+Census2010$TRTID10 <- as.numeric( Census2010$TRTID10 )
+lalb.pop$GEOID <- as.numeric( lalb.pop$GEOID )
+
+#merge
+lalb <- merge( lalb.pop, Census2010, by.x="GEOID", by.y="TRTID10" )
+
+plot( lalb )
+
+
+
+```
+
+
+
+
+
+
+
+
+
+```{r ,message=F, warning=F, echo=F, fig.align='center'}
+#Predicting cluster Grouping for 2000 census tracts
+
+# Get 2000 data
+Census2000 <-census.dats
+
+
+keep.these00 <-c("Foreign.Born00","Recent.Immigrant00","Poor.English00","Veteran00","Poverty00","Poverty.Black00","Poverty.White00","Poverty.Hispanic00","Pop.Black00","Pop.Hispanic00","Pop.Unemp00","Pop.Manufact00","Pop.SelfEmp00","Pop.Prof00","Female.LaborForce00")
+
+pred00<-predict(mod2, Census2000[keep.these00])
+
+Census2000$PredCluster <- pred00$classification
+
+TransDF2000<-Census2000 %>%
+  select(TRTID10, PredCluster)
+
+TransDF2010<-Census2010 %>%
+  select(TRTID10, cluster,Median.HH.Value10) 
+
+TransDFnew<-merge(TransDF2000,TransDF2010,by.all="TRTID10",all.x=TRUE)
+```
+
+
+***
+
+
+
+
+Neighborhood Change {.storyboard}
+=========================================
+
+
+### Creating Transition Matrix
+
+```{r ,message=F, warning=F, echo=F, fig.align='center'}
+
+#Transition Matrix
+prop.table( table( TransDFnew$PredCluster, TransDFnew$cluster ) , margin=1 )
+    
+```
+
+
+***
+
+According to the matrix, about 71% of the tracts in cluster 1 in 2000 remained in cluster 1 ten years later in 2010, while 82% of the tracts in cluster 2 remained the same over the ten year period. 79% of tracts in clusters 3 and 4 remained the same over the ten year period.  
+
+
+
+
+### Neighborhood Transitions
+
+```{r, message=F, warning=F, echo=F, fig.align='center'}
+
+# Sankey Transition Plot
+trn_mtrx1 <-
+  with(TransDFnew,
+       table(PredCluster, 
+             cluster))
+
+library(Gmisc)
+transitionPlot(trn_mtrx1, 
+               type_of_arrow = "gradient")
+```
+
+
+***
+It is likely that cluster 1 will experience gentrification. As previously noted, cluster 1 experiened high rates of poverty and only 71% of tracts remained in cluster 1 over the ten year time period.  
+
+
+
+About {.storyboard}
+=========================================
+
+
+
+
+
+### About the Developer 
+
+
+![](http://moviecultists.com/wp-content/uploads/2010/08/Will+Ferrell-150x150.jpg)
+
+***
+
+Nicole Hill is currenty pursuing her Master's in Program Evaluation and Data Analytics at Arizona State University. She resides in California with her husband and puppy, Peppermint. 
+
+Nicole can be contacted via email at: nicoleis@asu.edu
+
+
+
+
+### Documentation {data-commentary-width=400}
+
+```{r, eval=F, echo=T}
+# R libraries used for this project
+library( tidycensus ) # Load US Census boundary and attribute data
+library( tidyverse ) # Designed to make it easy to install/load core packages from the tidyverse in a single command
+library( ggplot2 ) # Create elegant data visualisations
+library( plyr ) # Tools for splitting, applying, and combining data
+library( stargazer ) # Regression and summary statistics tables
+library( corrplot ) # Visualization of a correlation matrix
+library( purrr ) # Provides a complete and consistent set of tools for working with functions and vectors
+library( flexdashboard ) # Creates interactive dashboards
+library( leaflet ) # Creates interactive web maps
+```
+
+
+***
+Please see comments to the left for package descriptions. 
+
+
+tidycensus, corrplot, and leaflet are available through github.com
+
+
+tidyverse, ggplot2, plyr, stargazer, purrr, and flexdashboard are available through CRAN
+
+
+A Census API Key is needed to run select packages. An API Key can be obtained by visiting: https://api.census.gov/data/key_signup.html
+
+
+
+
+
+
+
+
